@@ -18,9 +18,26 @@ struct Order {
     quantity: u64,
 }
 
-#[tokio::main]
-async fn main() {
-    // Create a jaeger exporter pipeline for a `trace_demo` service.
+async fn run_server() {
+    let (tx, rx) = channel::<Order>();
+    let name = "rand_server";
+    spinup(rx, format!("127.0.0.1:{}", 8080), name).await;
+
+    let k = time::Duration::from_micros(300);
+    let mut rng = thread_rng();
+
+    loop {
+        let tmp = Order {
+            price: rng.next_u64(),
+            quantity: rng.next_u64(),
+        };
+
+        tx.send(tmp);
+        thread::sleep(k);
+    }
+}
+
+async fn jaeger_logging() {
     let tracer = opentelemetry_jaeger::new_pipeline()
         .with_service_name("rubicon-stream-server")
         //.install_batch(opentelemetry::runtime::Tokio)
@@ -32,25 +49,20 @@ async fn main() {
 
     // Use the tracing subscriber `Registry`, or any other subscriber
     // that impls `LookupSpan`
-    let subscriber = Registry::default().with(otel_layer); // really we don't want to be storing logs in memory, because we us ALOT of it if we're going fast.
+    let subscriber = Registry::default().with(otel_layer); // really we don't want to be storing logs in memory, because we use ALOT of it if we're going fast.
     subscriber.init();
+}
 
+async fn stdout_logging() {
+    tracing_subscriber::fmt::init();
+}
 
-    let (tx, rx) = channel::<Order>();
-    let name = "rand_server";
-    spinup(rx, format!("127.0.0.1:{}", 8080), name).await;
+#[tokio::main]
+async fn main() {
+    // docker run -d -p6831:6831/udp -p6832:6832/udp -p16686:16686 -p14268:14268 jaegertracing/all-in-one:latest
+    // localhost:16686
 
-    let k = time::Duration::from_micros(1*1000*1000);
-    let mut rng = thread_rng();
-
-    loop {
-        let tmp = Order {
-            price: rng.next_u64(),
-            quantity: rng.next_u64(),
-        };
-
-
-        tx.send(tmp);
-        thread::sleep(k);
-    }
+    stdout_logging().await;
+    run_server().await;
+    
 }
