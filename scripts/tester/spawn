@@ -1,0 +1,5 @@
+for ((i = 0 ; i < $1 ; i++)); do
+  ./proc $i $2 &
+  sleep 1
+done
+wait

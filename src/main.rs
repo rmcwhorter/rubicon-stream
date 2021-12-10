@@ -1,95 +1,56 @@
-use futures_channel::mpsc::{unbounded, UnboundedSender};
-use futures_util::{future, pin_mut, stream::TryStreamExt, StreamExt};
-use serde::{Deserialize, Serialize};
-/**
- * how does this work?
- * firstly, we have some source of data
- * secondly, we have some websockets connection
- * we forward that data along
-*/
-use std::{
-    collections::HashMap,
-    env,
-    io::Error as IoError,
-    net::SocketAddr,
-    sync::{
-        mpsc::{Receiver, Sender},
-        Arc, Mutex,
-    },
-};
-use tokio::{
-    net::{TcpListener, TcpStream, ToSocketAddrs},
-    task,
-};
-use tokio_tungstenite::tungstenite::protocol::Message;
+use jwrs::spinup;
+use std::sync::mpsc::channel;
 
-use anyhow::{anyhow, Result};
+use rand::prelude::*;
+use std::{thread, time};
+use tracing_subscriber::EnvFilter;
 
-type Tx = UnboundedSender<Message>;
-type PubSubState = Arc<Mutex<HashMap<SocketAddr, Tx>>>;
+use tracing_opentelemetry::OpenTelemetryLayer;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::Registry;
+use tracing_subscriber::prelude::*;
 
-async fn data_intermediary<T: Serialize>(rx: Arc<Receiver<T>>, subs: PubSubState) {
+use serde::{Serialize, Deserialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct Order {
+    price: u64,
+    quantity: u64,
+}
+
+#[tokio::main]
+async fn main() {
+    // Create a jaeger exporter pipeline for a `trace_demo` service.
+    let tracer = opentelemetry_jaeger::new_pipeline()
+        .with_service_name("rubicon-stream-server")
+        //.install_batch(opentelemetry::runtime::Tokio)
+        .install_simple()
+        .expect("Error initializing Jaeger exporter");
+
+    // Create a layer with the configured tracer
+    let otel_layer = OpenTelemetryLayer::new(tracer);
+
+    // Use the tracing subscriber `Registry`, or any other subscriber
+    // that impls `LookupSpan`
+    let subscriber = Registry::default().with(otel_layer); // really we don't want to be storing logs in memory, because we us ALOT of it if we're going fast.
+    subscriber.init();
+
+
+    let (tx, rx) = channel::<Order>();
+    let name = "rand_server";
+    spinup(rx, format!("127.0.0.1:{}", 8080), name).await;
+
+    let k = time::Duration::from_micros(1*1000*1000);
+    let mut rng = thread_rng();
+
     loop {
-        if let Ok(x) = rx.try_recv() {
-            if let Ok(s) = serde_json::to_string(&x) {
-                let msg = Message::Text(s);
-                for (addr, sock) in subs.lock().unwrap().iter() {
-                    sock.unbounded_send(msg.clone()).unwrap();
-                }
-            }
-        }
+        let tmp = Order {
+            price: rng.next_u64(),
+            quantity: rng.next_u64(),
+        };
+
+
+        tx.send(tmp);
+        thread::sleep(k);
     }
 }
-
-async fn listener<K: ToSocketAddrs>(bind_addr: K, state: PubSubState) -> Result<()> {
-    let tcp_socket = TcpListener::bind(&bind_addr).await?;
-    println!("[SUCCESS]: LISTENER BOUND");
-    while let Ok((stream, addr)) = tcp_socket.accept().await {
-        tokio::spawn(json_server_conn_handler(state.clone(), stream, addr));
-    }
-
-    Ok(())
-}
-
-async fn json_server_conn_handler(state: PubSubState, raw_stream: TcpStream, addr: SocketAddr) {
-    println!("Incoming TCP connection from: {}", addr);
-
-    let ws_stream = tokio_tungstenite::accept_async(raw_stream)
-        .await
-        .expect("Error during the websocket handshake occurred");
-    println!("WebSocket connection established: {}", addr);
-
-    let (tx, rx) = unbounded();
-    state.lock().unwrap().insert(addr, tx);
-
-    let (outgoing, incoming) = ws_stream.split();
-
-    let handle_pubsub = incoming.try_for_each(|msg| {
-        println!(
-            "Received a message from {}: {}",
-            addr,
-            msg.to_text().unwrap()
-        );
-        future::ok(())
-    });
-
-    let receiver = rx.map(Ok).forward(outgoing);
-
-    pin_mut!(handle_pubsub, receiver);
-    future::select(handle_pubsub, receiver).await;
-
-    println!("{} disconnected", &addr);
-    state.lock().unwrap().remove(&addr);
-}
-
-async fn spinup<T: Serialize, U: ToSocketAddrs>(source: Receiver<T>, addr: U) {
-    let state = Arc::new(Mutex::new(HashMap::new()));
-    let arc_rx = Arc::new(source);
-    //task::spawn(listener(addr.clone(), state.clone()));
-    task::spawn(data_intermediary(arc_rx.clone(), state.clone()));
-
-    //tokio::spawn(listener(addr, state.clone()));
-    //tokio::spawn(data_intermediary(source, state.clone()));
-}
-
-fn main() {}

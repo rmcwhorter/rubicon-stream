@@ -1,0 +1,1 @@
+cd $RUBI/rubicon-stream/scripts/tester && npx ts-node tester.ts $1 $2
