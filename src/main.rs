@@ -1,4 +1,4 @@
-use jwrs::spinup;
+use jwd::spinup;
 use std::sync::mpsc::channel;
 
 use rand::prelude::*;

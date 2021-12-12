@@ -7,8 +7,8 @@ edition = "2021"
 
 [dependencies]
 # websockets server
-jwrs = { git="https://github.com/rmcwhorter/jwrs" }
-#jwrs = { path="/home/ryan/Documents/_Rubicon/jwrs" }
+#jwd = { git="https://github.com/rmcwhorter/jswsds-rs" }
+jwd = { path="/home/ryan/Documents/_Rubicon/jswsds-rs" }
 
 # async
 tokio = { version = "1.14.0", features = ["full"] }
